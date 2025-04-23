@@ -1,10 +1,12 @@
+# streamlit_app.py
 import streamlit as st
 from datetime import datetime
 import os
 
-# Import your HR bot functions from the improved module
-from hr_leave_bot import process_message, verify_credentials, get_employee_name
-from hr_leave_bot import check_leave_balance, view_leave_history, get_leave_policy, get_holidays, parse_nlp_leave_request
+# Import functions from our modules
+from leave_data import verify_credentials, get_employee_name
+from leave_tools import check_leave_balance, view_leave_history, get_leave_policy, get_holidays, parse_nlp_leave_request
+from leave_graph import process_message
 
 # Configure the page
 st.set_page_config(page_title="HR Leave Management Assistant", page_icon="🗓️", layout="wide")
@@ -36,13 +38,6 @@ def handle_logout():
     st.session_state.employee_name = None
     st.session_state.messages = []
     st.session_state.first_login = True
-
-# Set OpenAI API key from Streamlit secrets or environment
-api_key = os.environ.get("OPENAI_API_KEY")
-if not api_key:
-    # In production, use Streamlit secrets
-    if "openai_api_key" in st.secrets:
-        api_key = st.secrets["openai_api_key"]
 
 # Main page content
 st.title("🗓️ HR Leave Management Assistant")
@@ -116,23 +111,23 @@ else:
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("Check Leave Balance", use_container_width=True):
-            response = check_leave_balance(st.session_state.employee_id)
+            result = check_leave_balance(st.session_state.employee_id)
             st.session_state.messages.append({"role": "user", "content": "Check my leave balance"})
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.messages.append({"role": "assistant", "content": result})
             st.rerun()
     
     with col2:
         if st.button("View Leave History", use_container_width=True):
-            response = view_leave_history(st.session_state.employee_id)
+            result = view_leave_history(st.session_state.employee_id)
             st.session_state.messages.append({"role": "user", "content": "Show my leave history"})
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.messages.append({"role": "assistant", "content": result})
             st.rerun()
     
     with col3:
         if st.button("View Holidays", use_container_width=True):
-            response = get_holidays()
+            result = get_holidays()
             st.session_state.messages.append({"role": "user", "content": "Show upcoming holidays"})
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.messages.append({"role": "assistant", "content": result})
             st.rerun()
     
     # Request Leave form
@@ -165,8 +160,8 @@ else:
             st.session_state.messages.append({"role": "user", "content": request_text})
             
             with st.spinner("Processing your request..."):
-                response = parse_nlp_leave_request(st.session_state.employee_id, request_text)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                result = parse_nlp_leave_request(st.session_state.employee_id, request_text)
+                st.session_state.messages.append({"role": "assistant", "content": result})
             
             st.rerun()
     
@@ -175,28 +170,29 @@ else:
         policies = get_leave_policy()
         st.write(policies)
     
-    # Chat input - Process with NLP
-    if prompt := st.chat_input("How can I assist with your leave management needs?"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    # Chat input - Process with LangGraph
+if prompt := st.chat_input("How can I assist with your leave management needs?"):
+    # Store the user message temporarily before adding to state if needed,
+    # or add it and then pass history carefully. Let's add it first.
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # Display the latest user message immediately (optional but good UX)
+    # You might need to adjust placement depending on st.rerun behaviour
+    # Consider adding this display logic within the main message loop before chat_input
+
+    with st.spinner("Thinking..."):
+        # Call process_message, passing history *before* the new prompt, and the new prompt itself
+        # Unpack the returned tuple: response text and the new full history
+        response_text, updated_history = process_message(
+            employee_id=st.session_state.employee_id,
+            # Pass the history *before* adding the current user 'prompt'
+            current_messages=st.session_state.messages[:-1], 
+            # Pass the current user input message using the correct variable 'prompt'
+            new_user_message=prompt 
+        )
         
-        with st.spinner("Thinking..."):
-            # Handle common direct queries without going through the full agent
-            if any(keyword in prompt.lower() for keyword in ["balance", "how many days", "leave left"]):
-                response = check_leave_balance(st.session_state.employee_id)
-            elif any(keyword in prompt.lower() for keyword in ["history", "previous leaves", "past leaves"]):
-                response = view_leave_history(st.session_state.employee_id)
-            elif any(keyword in prompt.lower() for keyword in ["policy", "policies", "rules"]):
-                response = get_leave_policy()
-            elif any(keyword in prompt.lower() for keyword in ["holiday", "holidays", "day off"]):
-                response = get_holidays()
-            # For leave requests or more complex queries, use the agent
-            elif any(keyword in prompt.lower() for keyword in ["request", "apply", "take", "want", "need"]) and \
-                 any(leave_type in prompt.lower() for leave_type in ["annual", "sick", "personal", "bereavement", "maternity", "paternity"]):
-                response = parse_nlp_leave_request(st.session_state.employee_id, prompt)
-            else:
-                # For more complex queries, use the full LangChain agent
-                response = process_message(st.session_state.employee_id, prompt)
-                
-            st.session_state.messages.append({"role": "assistant", "content": response})
-        
-        st.rerun()
+        # Update the session state history with the complete history returned by the function
+        st.session_state.messages = updated_history
+
+    # Rerun to display the updated message list (which now includes the assistant's response)
+    st.rerun()
